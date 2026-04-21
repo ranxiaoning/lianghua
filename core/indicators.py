@@ -163,8 +163,9 @@ def latest_signals(df: pd.DataFrame) -> dict:
     bb_pos     = '上轨附近' if row.get('close', 0) >= row.get('bb_upper', 0) * 0.99 else \
                  '下轨附近' if row.get('close', 0) <= row.get('bb_lower', 0) * 1.01 else '轨道内'
 
+    date_val = row.get('date') if 'date' in df.columns else row.get('datetime', '')
     return {
-        '日期':     str(row.get('date', ''))[:10],
+        '日期':     str(date_val)[:16],
         '收盘价':   _safe('close'),
         'MA5':      _safe('ma5'),
         'MA20':     _safe('ma20'),

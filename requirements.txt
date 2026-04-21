@@ -9,3 +9,4 @@ scipy>=1.11.0
 statsmodels>=0.14.0
 jupyter>=1.0.0
 pyarrow>=12.0.0
+torch>=2.0.0

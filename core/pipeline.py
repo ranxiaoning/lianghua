@@ -6,14 +6,21 @@
 
 用法:
   python core/pipeline.py --symbol 601288 --start 20200101 --end 20241231
+  python core/pipeline.py --symbol 601288 --start 20230101 --end 20231231 --period 1h
+  python core/pipeline.py --symbol 601288 --start 20230601 --end 20230901 --period 30m
   python core/pipeline.py --symbol 600519 --start 20180101 --end 20241231 --no-plot
+
+时间粒度 --period 支持：
+  1d          日线（默认）
+  1h / 2h     小时线（akshare 60min 原生；2h 自动重采样）
+  1m 5m 15m 30m  分钟线（akshare 原生）
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
-# 确保从项目根目录运行时 core/ 包可被找到
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -24,9 +31,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.gridspec as gridspec
-from matplotlib.patches import Patch
 
-from core.fetch import fetch_daily
+from core.fetch import fetch_daily, fetch_intraday
 from core.indicators import compute_all, latest_signals
 
 plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
@@ -39,11 +45,42 @@ DATA_DIR.mkdir(exist_ok=True)
 
 
 # ══════════════════════════════════════════════════════
+# 时间粒度解析
+# ══════════════════════════════════════════════════════
+
+def parse_period(period_str: str) -> tuple[str, int]:
+    """
+    解析时间粒度字符串，返回 (unit, n)。
+    合法格式：<正整数><单位>，单位为 m / h / d。
+    例：'1d' → ('d', 1)，'2h' → ('h', 2)，'30m' → ('m', 30)。
+    """
+    m = re.fullmatch(r"(\d+)([mhd])", period_str.strip().lower())
+    if not m:
+        raise ValueError(
+            f"无效时间粒度 '{period_str}'，"
+            f"格式：<数字><单位 m/h/d>，例如：1d / 1h / 2h / 30m"
+        )
+    n, unit = int(m.group(1)), m.group(2)
+    if unit == "d" and n != 1:
+        raise ValueError("日线只支持 1d")
+    return unit, n
+
+
+def _period_to_minutes(unit: str, n: int) -> int | None:
+    """('d', 1) → None（日线）；('h', 2) → 120；('m', 30) → 30。"""
+    if unit == "d":
+        return None
+    return n * 60 if unit == "h" else n
+
+
+# ══════════════════════════════════════════════════════
 # 图表
 # ══════════════════════════════════════════════════════
 
 def plot_analysis(df: pd.DataFrame, symbol: str,
-                  start: str, end: str) -> Path:
+                  start: str, end: str,
+                  period: str = "1d",
+                  date_col: str = "date") -> Path:
     """
     三联技术分析图：
       ① 价格 + MA5 + MA20 + EMA12/26 + 布林带
@@ -60,7 +97,7 @@ def plot_analysis(df: pd.DataFrame, symbol: str,
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
     ax3 = fig.add_subplot(gs[2], sharex=ax1)
 
-    dates = df["date"]
+    dates = df[date_col]
 
     # ── ① 价格面板 ─────────────────────────────────────
     ax1.fill_between(dates, df["bb_lower"], df["bb_upper"],
@@ -78,14 +115,15 @@ def plot_analysis(df: pd.DataFrame, symbol: str,
     ax1.legend(loc="upper left", fontsize=8, ncol=3, framealpha=0.8)
     ax1.grid(True, alpha=0.18)
     ax1.set_title(
-        f"{symbol}  技术分析图  {start[:4]}-{start[4:6]}-{start[6:]} ~ "
+        f"{symbol}  技术分析图（{period}）  "
+        f"{start[:4]}-{start[4:6]}-{start[6:]} ~ "
         f"{end[:4]}-{end[4:6]}-{end[6:]}",
         fontsize=13, fontweight="bold", pad=10,
     )
     plt.setp(ax1.get_xticklabels(), visible=False)
 
     # ── ② MACD 面板 ────────────────────────────────────
-    hist      = df["macd"]
+    hist       = df["macd"]
     colors_bar = ["#c0392b" if v >= 0 else "#27ae60" for v in hist]
     ax2.bar(dates, hist, color=colors_bar, width=1.0, alpha=0.75, label="MACD 柱")
     ax2.plot(dates, df["diff"], color="#E53935", lw=1.1, label="DIFF")
@@ -110,21 +148,27 @@ def plot_analysis(df: pd.DataFrame, symbol: str,
     ax3.set_ylabel("RSI(14)", fontsize=10)
     ax3.legend(loc="upper left", fontsize=8, ncol=3, framealpha=0.8)
     ax3.grid(True, alpha=0.18)
-    ax3.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-    ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+
+    # x 轴格式：日线用季度月份标签；分钟/小时线用月份标签
+    if date_col == "date":
+        ax3.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    else:
+        ax3.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+        ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
     fig.autofmt_xdate(rotation=30)
 
-    # 年份分界线（三图共享）
+    # 年份分界线
     years = pd.date_range(
-        f"{df['date'].dt.year.min()}-01-01",
-        f"{df['date'].dt.year.max()}-12-31",
+        f"{dates.dt.year.min()}-01-01",
+        f"{dates.dt.year.max()}-12-31",
         freq="YS",
     )
     for yr in years:
         for ax in [ax1, ax2, ax3]:
             ax.axvline(yr, color="#dddddd", lw=0.8, zorder=0)
 
-    out = CHARTS_DIR / f"{symbol}_analysis_{start}_{end}.png"
+    out = CHARTS_DIR / f"{symbol}_{period}_analysis_{start}_{end}.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"[图表] → {out}")
@@ -155,9 +199,8 @@ def print_summary(df: pd.DataFrame, symbol: str) -> None:
             v = sigs.get(k, "—")
             print(f"    {k:<10}: {v}")
 
-    # 近期涨跌
     print(f"\n  【近期表现】")
-    for n, label in [(5, "近5日"), (20, "近20日"), (60, "近60日")]:
+    for n, label in [(5, "近5根"), (20, "近20根"), (60, "近60根")]:
         if len(df) > n:
             ret = (df["close"].iloc[-1] / df["close"].iloc[-1 - n] - 1) * 100
             sign = "+" if ret >= 0 else ""
@@ -171,9 +214,10 @@ def print_summary(df: pd.DataFrame, symbol: str) -> None:
 # ══════════════════════════════════════════════════════
 
 def save_enriched(df: pd.DataFrame, symbol: str,
-                  start: str, end: str) -> Path:
+                  start: str, end: str,
+                  period: str = "1d") -> Path:
     """保存带指标的完整数据到 data/ 目录（parquet + CSV 双轨）。"""
-    stem = f"{symbol}_indicators_{start}_{end}"
+    stem = f"{symbol}_{period}_indicators_{start}_{end}"
 
     out_pq  = DATA_DIR / f"{stem}.parquet"
     out_csv = DATA_DIR / f"{stem}.csv"
@@ -191,23 +235,36 @@ def save_enriched(df: pd.DataFrame, symbol: str,
 # ══════════════════════════════════════════════════════
 
 def run(symbol: str, start: str, end: str,
+        period: str = "1d",
         no_plot: bool = False) -> pd.DataFrame:
     """
     完整数据分析流程：
-      1. 拉取 / 读取行情数据
+      1. 拉取 / 读取行情数据（日线或分钟/小时线）
       2. 计算全套技术指标
       3. 打印最新指标摘要
-      4. 保存带指标数据（parquet）
+      4. 保存带指标数据（parquet + CSV）
       5. 生成三联技术分析图
     """
     print(f"\n{'═'*55}")
-    print(f"  数据分析 Pipeline — {symbol}  {start}~{end}")
+    print(f"  数据分析 Pipeline — {symbol}  {start}~{end}  [{period}]")
     print(f"{'═'*55}")
 
+    unit, n = parse_period(period)
+    minutes = _period_to_minutes(unit, n)
+
     # Step 1: 拉取数据
-    df = fetch_daily(symbol, start, end)
-    print(f"  行情数据: {len(df)} 行  "
-          f"{df['date'].iloc[0].date()} ~ {df['date'].iloc[-1].date()}")
+    if minutes is None:
+        df = fetch_daily(symbol, start, end)
+        date_col = "date"
+        first_dt = df["date"].iloc[0].date()
+        last_dt  = df["date"].iloc[-1].date()
+    else:
+        df = fetch_intraday(symbol, start, end, minutes=minutes)
+        date_col = "datetime"
+        first_dt = df["datetime"].iloc[0]
+        last_dt  = df["datetime"].iloc[-1]
+
+    print(f"  行情数据: {len(df)} 行  {first_dt} ~ {last_dt}")
 
     # Step 2: 指标计算
     df = compute_all(df)
@@ -217,11 +274,11 @@ def run(symbol: str, start: str, end: str,
     print_summary(df, symbol)
 
     # Step 4: 保存
-    save_enriched(df, symbol, start, end)
+    save_enriched(df, symbol, start, end, period=period)
 
     # Step 5: 图表
     if not no_plot:
-        plot_analysis(df, symbol, start, end)
+        plot_analysis(df, symbol, start, end, period=period, date_col=date_col)
 
     return df
 
@@ -236,14 +293,17 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--symbol",   required=True, help="股票代码，如 601288")
-    parser.add_argument("--start",    required=True, help="开始日期 YYYYMMDD")
-    parser.add_argument("--end",      required=True, help="结束日期 YYYYMMDD")
-    parser.add_argument("--no-plot",  action="store_true", help="不生成图表")
+    parser.add_argument("--symbol",  required=True, help="股票代码，如 601288")
+    parser.add_argument("--start",   required=True, help="开始日期 YYYYMMDD")
+    parser.add_argument("--end",     required=True, help="结束日期 YYYYMMDD")
+    parser.add_argument("--period",  default="1d",
+                        help="时间粒度：1d（默认）/ 1h / 2h / 30m / 15m / 5m / 1m")
+    parser.add_argument("--no-plot", action="store_true", help="不生成图表")
     args = parser.parse_args()
 
     try:
-        run(args.symbol, args.start, args.end, no_plot=args.no_plot)
+        run(args.symbol, args.start, args.end,
+            period=args.period, no_plot=args.no_plot)
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         sys.exit(1)

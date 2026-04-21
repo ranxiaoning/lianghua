@@ -199,67 +199,108 @@ def _save(df: pd.DataFrame, symbol: str, start: str, end: str,
 
 
 # ══════════════════════════════════════════════════════
-# 小时线
+# 分钟 / 小时线
 # ══════════════════════════════════════════════════════
+
+# akshare stock_zh_a_hist_min_em 原生支持的分钟粒度
+_AK_MIN_PERIODS = (1, 5, 15, 30, 60)
+
+
+def fetch_intraday(symbol: str, start: str, end: str,
+                   minutes: int = 60,
+                   adjust: str = "qfq",
+                   quiet: bool = False) -> pd.DataFrame:
+    """
+    拉取分钟 / 小时 K 线。返回含 'datetime' 列的 DataFrame。
+
+    Parameters
+    ----------
+    minutes : 粒度（分钟数）。原生支持 1/5/15/30/60；
+              其他值（如 120=2h）自动从最大可整除的原生周期聚合重采样。
+    """
+    if minutes in _AK_MIN_PERIODS:
+        base_min = minutes
+    else:
+        candidates = [m for m in sorted(_AK_MIN_PERIODS, reverse=True)
+                      if minutes % m == 0]
+        if not candidates:
+            raise ValueError(
+                f"不支持的分钟粒度 {minutes}，"
+                f"支持：{_AK_MIN_PERIODS} 及其整倍数（如 120=2h）"
+            )
+        base_min = candidates[0]
+
+    df = _fetch_intraday_raw(symbol, start, end, base_min, adjust, quiet)
+    if minutes != base_min:
+        df = _resample_intraday(df, minutes)
+    return df
+
 
 def fetch_hourly(symbol: str, start: str, end: str,
                  adjust: str = "qfq",
                  quiet: bool = False) -> pd.DataFrame:
-    """
-    拉取60分钟K线。akshare 对历史深度有限制，按季度分批拉取并合并。
+    """向后兼容接口，等价于 fetch_intraday(minutes=60)。"""
+    return fetch_intraday(symbol, start, end, minutes=60,
+                          adjust=adjust, quiet=quiet)
 
-    Parameters
-    ----------
-    symbol : 股票代码，如 "601288"
-    start  : 开始日期 "YYYYMMDD"
-    end    : 结束日期 "YYYYMMDD"
-    adjust : 复权方式 qfq/hfq/none
-    quiet  : True 时不打印日志
-    """
+
+def _fetch_intraday_raw(symbol: str, start: str, end: str,
+                        base_min: int, adjust: str, quiet: bool) -> pd.DataFrame:
     from datetime import datetime, timedelta
+    import time as _time
 
     adj_map = {"qfq": "qfq", "hfq": "hfq", "none": ""}
     adj_val = adj_map.get(adjust, "qfq")
-
     start_dt = datetime.strptime(start, "%Y%m%d")
     end_dt   = datetime.strptime(end,   "%Y%m%d")
 
-    import time as _time
-    chunks = []
-    cur = start_dt
-    batch_days = 90
-
+    chunks, cur, batch_days = [], start_dt, 90
     while cur <= end_dt:
         chunk_end = min(cur + timedelta(days=batch_days), end_dt)
-        s = cur.strftime("%Y-%m-%d")
-        e = chunk_end.strftime("%Y-%m-%d")
+        s, e = cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")
         if not quiet:
-            print(f"[fetch] 小时线 {symbol}  {s} → {e}")
+            print(f"[fetch] {base_min}min K线 {symbol}  {s} → {e}")
         try:
-            df_chunk = ak.stock_zh_a_hist_min_em(
-                symbol=symbol,
-                period="60",
-                start_date=s + " 09:00:00",
-                end_date=e   + " 15:30:00",
+            chunk = ak.stock_zh_a_hist_min_em(
+                symbol=symbol, period=str(base_min),
+                start_date=s + " 09:00:00", end_date=e + " 15:30:00",
                 adjust=adj_val,
             )
-            if not df_chunk.empty:
-                chunks.append(df_chunk)
+            if not chunk.empty:
+                chunks.append(chunk)
         except Exception as exc:
             if not quiet:
-                print(f"  [WARN] {s}~{e} 拉取失败: {exc}，跳过")
+                print(f"  [WARN] {s}~{e} 失败: {exc}，跳过")
         cur = chunk_end + timedelta(days=1)
         _time.sleep(0.3)
 
     if not chunks:
-        raise ValueError(f"未获取到任何小时线数据：{symbol}")
-
-    df = pd.concat(chunks, ignore_index=True)
-    df = df.drop_duplicates()
-    return _clean_hourly(df)
+        raise ValueError(f"未获取到任何 {base_min}min 数据：{symbol}")
+    df = pd.concat(chunks, ignore_index=True).drop_duplicates()
+    return _clean_intraday(df)
 
 
-def _clean_hourly(df: pd.DataFrame) -> pd.DataFrame:
+def _resample_intraday(df: pd.DataFrame, target_minutes: int) -> pd.DataFrame:
+    """将 datetime-indexed 的分钟数据聚合到 target_minutes 周期。"""
+    df = df.set_index("datetime")
+    agg: dict[str, str] = {
+        "open": "first", "high": "max", "low": "min", "close": "last",
+    }
+    for col in ("volume", "amount"):
+        if col in df.columns:
+            agg[col] = "sum"
+    for col in ("chg_pct", "chg_amt", "amplitude_pct", "turnover_pct"):
+        if col in df.columns:
+            agg[col] = "last"
+    df = (df[list(agg)]
+          .resample(f"{target_minutes}min")
+          .agg(agg)
+          .dropna(subset=["close"])
+          .reset_index())
+    return df
+
+
+def _clean_intraday(df: pd.DataFrame) -> pd.DataFrame:
     col_map = {
         "时间": "datetime", "开盘": "open",  "收盘": "close",
         "最高": "high",     "最低": "low",   "成交量": "volume",
