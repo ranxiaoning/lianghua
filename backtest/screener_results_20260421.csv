@@ -1,0 +1,4 @@
+﻿buy_pct,sell_pct,ann_ret,total_ret,max_dd,sharpe,calmar,win_rate,avg_profit,n_trades,ann_trades,years,bh_ret,bh_ann,profit_factor,year_win_rate,n_profit_years,n_total_years,composite_score,symbol,data_years,n_combos
+96.0,102.0,11.85,206.07,30.44,0.523,0.389,100.0,6.25,19,1.9,9.99,135.78,8.97,inf,70.0,7,10,0.9851,601288,9.6,48
+92.0,102.0,26.46,223.11,44.91,0.729,0.589,100.0,10.87,15,3.0,5.0,59.1,9.74,inf,80.0,4,5,0.85,600970,4.8,48
+90.0,106.0,16.69,116.28,19.5,0.712,0.856,100.0,17.78,5,1.0,5.0,82.12,12.75,inf,80.0,4,5,0.85,600028,4.8,48

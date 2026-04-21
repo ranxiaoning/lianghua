@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python fetch_stock.py --symbol 601288 --start 20150101 --end 20241231 --period daily --adjust qfq)",
+      "Bash(python -X utf8 fetch_stock.py --symbol 601288 --start 20150101 --end 20241231 --period daily --adjust qfq)",
+      "Bash(python -X utf8 -c ' *)"
+    ]
+  }
+}
