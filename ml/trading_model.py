@@ -92,6 +92,7 @@ DEFAULT_HP: dict = {
     "fee_rate":      0.001,   # 单边手续费（千分之一）
     "max_pos":       1.0,     # 最大仓位（1 = 满仓，不做空）
     "fee_lambda":    1.5,     # 损失函数中的手续费惩罚倍率
+    "loss_type":     "sharpe", # 损失函数类型：sharpe（夏普代理）或 pnl（纯P&L）
 }
 
 
@@ -333,6 +334,22 @@ def sharpe_loss(positions: torch.Tensor, returns: torch.Tensor,
     return -sharpe   # 最小化负 Sharpe = 最大化 Sharpe
 
 
+def pnl_loss(positions: torch.Tensor, returns: torch.Tensor,
+             fee_rate: float, fee_lambda: float) -> torch.Tensor:
+    """
+    纯 P&L 损失：直接最大化累计净收益。
+
+    参数与 sharpe_loss 相同，fee_lambda 同样用于放大手续费惩罚。
+    返回标量 loss（越小 = 净收益越高）。
+    """
+    zeros    = torch.zeros(positions.shape[0], 1, device=positions.device)
+    prev_pos = torch.cat([zeros, positions[:, :-1]], dim=1)
+    delta    = positions - prev_pos
+    fees     = fee_rate * fee_lambda * delta.abs()
+    pnl      = positions * returns - fees
+    return -pnl.mean()
+
+
 # ══════════════════════════════════════════════════════
 #  训练（单次）
 # ══════════════════════════════════════════════════════
@@ -394,7 +411,8 @@ def _train_once(features: np.ndarray, returns: np.ndarray,
 
             # 前向：输出 (B, seq_len) 的仓位序列
             pos  = model(x_batch) * hp["max_pos"]
-            loss = sharpe_loss(pos, r_batch, hp["fee_rate"], hp["fee_lambda"])
+            _loss_fn = pnl_loss if hp.get("loss_type", "sharpe") == "pnl" else sharpe_loss
+            loss = _loss_fn(pos, r_batch, hp["fee_rate"], hp["fee_lambda"])
 
             optimizer.zero_grad()
             loss.backward()
