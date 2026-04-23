@@ -402,6 +402,7 @@ def _train_once(features: np.ndarray, returns: np.ndarray,
 
     log_every = max(1, hp["epochs"] // 5)   # 每训练 20% 打印一次
 
+    _loss_fn = pnl_loss if hp.get("loss_type", "sharpe") == "pnl" else sharpe_loss
     model.train()
     for epoch in range(1, hp["epochs"] + 1):
         epoch_loss = 0.0
@@ -411,7 +412,6 @@ def _train_once(features: np.ndarray, returns: np.ndarray,
 
             # 前向：输出 (B, seq_len) 的仓位序列
             pos  = model(x_batch) * hp["max_pos"]
-            _loss_fn = pnl_loss if hp.get("loss_type", "sharpe") == "pnl" else sharpe_loss
             loss = _loss_fn(pos, r_batch, hp["fee_rate"], hp["fee_lambda"])
 
             optimizer.zero_grad()
