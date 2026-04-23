@@ -1016,6 +1016,9 @@ def main() -> None:
                       metavar="F", help=f"最大仓位，默认 {DEFAULT_HP['max_pos']}")
     hp_g.add_argument("--fee-lambda", type=float, default=DEFAULT_HP["fee_lambda"],
                       metavar="F", help=f"手续费惩罚倍率，默认 {DEFAULT_HP['fee_lambda']}")
+    hp_g.add_argument("--loss", choices=["sharpe", "pnl"],
+                      default=DEFAULT_HP["loss_type"],
+                      help="损失函数：sharpe（夏普代理，默认）或 pnl（纯P&L最大收益）")
 
     args = p.parse_args()
 
@@ -1036,6 +1039,7 @@ def main() -> None:
         "weight_decay": DEFAULT_HP["weight_decay"],
         "grad_clip":    DEFAULT_HP["grad_clip"],
         "fee_lambda":   args.fee_lambda,
+        "loss_type":    args.loss,
     }
 
     run(args.symbol, args.start, args.end, hp)
