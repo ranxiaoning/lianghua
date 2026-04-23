@@ -456,6 +456,53 @@ class TestPredictorAPI(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════
+class TestPnlLoss(unittest.TestCase):
+    """pnl_loss 函数测试"""
+
+    def test_uptrend_full_pos_lower_loss(self):
+        """上涨市场中满仓策略的 pnl_loss 应低于随机策略"""
+        from ml.trading_model import pnl_loss
+        T = 50
+        returns  = torch.ones(1, T) * 0.01
+        perfect  = torch.ones(1, T)
+        random_p = torch.rand(1, T)
+        loss_perfect = pnl_loss(perfect, returns, 0.001, 1.0).item()
+        loss_random  = pnl_loss(random_p, returns, 0.001, 1.0).item()
+        self.assertLess(loss_perfect, loss_random,
+                        "上涨市场满仓时 pnl_loss 应更小（盈利更多）")
+
+    def test_fee_increases_loss(self):
+        """手续费越高，pnl_loss 应越大"""
+        from ml.trading_model import pnl_loss
+        T = 30
+        pos  = torch.rand(1, T)
+        rets = torch.ones(1, T) * 0.005
+        loss_low  = pnl_loss(pos, rets, 0.0001, 1.0).item()
+        loss_high = pnl_loss(pos, rets, 0.005,  1.0).item()
+        self.assertLess(loss_low, loss_high,
+                        "手续费越高，loss 应越大（净收益越低）")
+
+    def test_zero_pos_zero_pnl(self):
+        """全空仓时 pnl_loss 应约为 0"""
+        from ml.trading_model import pnl_loss
+        T    = 50
+        pos  = torch.zeros(1, T)
+        rets = torch.ones(1, T) * 0.01
+        loss = pnl_loss(pos, rets, 0.001, 1.0).item()
+        self.assertAlmostEqual(loss, 0.0, delta=1e-4,
+                               msg="全空仓时 pnl_loss 应约为0")
+
+    def test_output_is_scalar(self):
+        """pnl_loss 必须返回标量张量"""
+        from ml.trading_model import pnl_loss
+        pos  = torch.rand(4, 20)
+        rets = torch.randn(4, 20) * 0.01
+        loss = pnl_loss(pos, rets, 0.001, 1.5)
+        self.assertEqual(loss.shape, torch.Size([]),
+                         "pnl_loss 应返回标量（shape=[]）")
+
+
+# ══════════════════════════════════════════════════════
 # 入口
 # ══════════════════════════════════════════════════════
 
